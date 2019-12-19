@@ -74,7 +74,7 @@ rec
     doCheck = false;
   };
 
-  # TODO: support for git deps
+  # TODO: https://github.com/nmattia/naersk/issues/48
   #test_talent-plan-4 = buildPackage "${sources.talent-plan}/rust/projects/project-4" {};
   #test_talent-plan-5 = buildPackage "${sources.talent-plan}/rust/projects/project-5" {};
 

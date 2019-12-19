@@ -1,4 +1,7 @@
 { src
+, bash
+, nix
+, coreutils
 , preBuild
   #| What command to run during the build phase
 , cargoBuild
@@ -45,6 +48,7 @@
 , jq
 , darwin
 , writeText
+, writeScript
 , symlinkJoin
 , runCommand
 , remarshal
@@ -162,9 +166,103 @@ let
     # iff not in a shell
     inherit builtDependencies;
 
-    RUSTC = "${rustc}/bin/rustc";
+    RUSTC =
+      let
+        inner = writeScript "rustc-inner"
+        ''
+        #!${bash}/bin/bash
+        set -euo pipefail
+        for k in $envdir/*; do
+          export $(${coreutils}/bin/basename $k)="$(${coreutils}/bin/cat $k)"
+        done
+        ${coreutils}/bin/env
+        exit 44
+        echo envfile >&2
+        ${coreutils}/bin/cat $envfile >&2
+
+        echo "full monty" >&2
+        # TODO: proper xargs
+
+        ${coreutils}/bin/cat $envfile | /usr/bin/xargs >&2
+        #${coreutils}/bin/env $(${coreutils}/bin/cat $envfile | ${coreutils}/bin/xargs) ${coreutils}/bin/env ${rustc}/bin/rustc "$@"
+        '';
+
+        fakerust = writeScript "rustc"
+        ''
+        #!${bash}/bin/bash
+        args=( )
+
+        store_paths=( )
+
+        new_out_dir=$(mktemp -d)
+        env_file=$(mktemp)
+
+        while [[ $# -gt 0 ]]; do
+          arg="$1"
+          case $1 in
+            *)
+              args+=( "$arg" )
+              shift
+              ;;
+          esac
+        done
+
+        for i in "''${!args[@]}"
+        do
+          old_arg="''${args[$i]}"
+          args[$i]="''${old_arg/$CARGO_TARGET_DIR/$new_out_dir}"
+
+          # TODO: double check regex
+          store_path=$(echo "''${args[$i]}" | grep -o '/nix/store/[a-zA-Z0-9_+.\-]*' || true)
+          if [ -n "$store_path" ]; then
+            for sp in $store_path; do
+              store_paths+=( "$sp" )
+            done
+          fi
+        done
+
+        # TODO: this fails on concurrent builds
+        # TODO: we don't need this on rustc -vV
+        ${rsync}/bin/rsync -avh "$CARGO_TARGET_DIR/" "$new_out_dir/" >/dev/null 2>/dev/null
+
+        envdir=$(mktemp -d)/env
+        mkdir -p $envdir
+        argsfile=$(mktemp -d)/args
+
+        while [[ $# -gt 0 ]]; do
+          old_arg="$1"
+          new_arg="''${old_arg/$CARGO_TARGET_DIR/$new_out_dir}"
+          case $1 in
+            *)
+              args+=( "$arg" )
+              shift
+              ;;
+          esac
+        done
+
+
+        # TODO: reset CARGO_TARGET_DIR
+        while IFS='=' read -r -d "" k v; do
+          if [[ $v =~ $NIX_BUILD_TOP ]]; then
+            echo "Skipping env variable $k" >&2
+          else
+            while IFS= read -r sp; do
+              store_paths+=( "$sp" )
+            done < <(echo "$v" | grep -o '/nix/store/[a-zA-Z0-9_+.\-]*' || true)
+            echo "$v" > $envdir/$k
+          fi
+        done < <(env -0)
+
+        ${nix}/bin/nix build -L '(derivation { name = "hello"; system = "${builtins.currentSystem}"; builder = /bin/sh; args = [ "-c" (builtins.storePath ${inner}) ]; envdir = '$envdir'; argsfile = "foobar"; } )'
+
+        ${rustc}/bin/rustc ''${args[@]}
+
+        ${rsync}/bin/rsync -avh "$new_out_dir/" "$CARGO_TARGET_DIR/" >/dev/null 2>/dev/null
+        ''; in fakerust;
 
     configurePhase = ''
+      export CARGO_TARGET_DIR=$(mktemp -d)
+      export _NIX_TEST_NO_SANDBOX=1
       cargo_release=( ${lib.optionalString release "--release" } )
       cargo_options=( ${lib.escapeShellArgs cargoOptions} )
 

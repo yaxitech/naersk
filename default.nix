@@ -3,6 +3,7 @@
 , symlinkJoin
 , stdenv
 , writeText
+, writeScript
 , jq
 , rsync
 , darwin
@@ -11,6 +12,9 @@
 , rustc
 , zstd
 , fetchurl
+, bash
+, nix
+, coreutils
 }:
 
 let
@@ -19,10 +23,14 @@ let
   defaultBuildAttrs = {
     inherit
       jq
+      nix
+      coreutils
       runCommand
       lib
       darwin
+      bash
       writeText
+      writeScript
       stdenv
       rsync
       remarshal
