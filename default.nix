@@ -5,6 +5,7 @@
 , writeText
 , writeScript
 , jq
+, findutils
 , rsync
 , darwin
 , remarshal
@@ -24,6 +25,7 @@ let
     inherit
       jq
       nix
+      findutils
       coreutils
       runCommand
       lib
@@ -59,6 +61,7 @@ let
       import ./build.nix
         (
           defaultBuildAttrs // {
+            incremental = true;
             pname = config.packageName;
             version = config.packageVersion;
             preBuild = lib.optionalString (!config.isSingleStep) ''
@@ -76,6 +79,7 @@ let
                   (
                     {
                       inherit gitDependencies;
+                      incremental = true;
                       src = libb.dummySrc {
                         cargoconfig =
                           if builtinz.pathExists (toString config.root + "/.cargo/config")

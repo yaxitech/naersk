@@ -1,6 +1,7 @@
 { src
 , bash
 , nix
+, incremental
 , coreutils
 , preBuild
   #| What command to run during the build phase
@@ -55,6 +56,7 @@
 , crateDependencies
 , zstd
 , fetchurl
+, findutils
 }:
 
 let
@@ -166,98 +168,164 @@ let
     # iff not in a shell
     inherit builtDependencies;
 
-    RUSTC =
+    RUSTC = if ! incremental then "${rustc}/bin/rustc" else
       let
         inner = writeScript "rustc-inner"
         ''
         #!${bash}/bin/bash
         set -euo pipefail
+
+        target_dir=$out/target
+
+        ${coreutils}/bin/mkdir -p $out/target
+        ${coreutils}/bin/ls $out/target
+        ${rsync}/bin/rsync -ah \
+          --no-owner \
+          --no-perms \
+          "$CARGO_TARGET_DIR/" \
+          "$target_dir/" \
+          >/dev/null 2>/dev/null
+
+        ${coreutils}/bin/chmod -R +w $target_dir
+        ${coreutils}/bin/ls $out/target
+
+        export CARGO_TARGET_DIR=$target_dir
+
+        set -euo pipefail
         for k in $envdir/*; do
           export $(${coreutils}/bin/basename $k)="$(${coreutils}/bin/cat $k)"
         done
-        ${coreutils}/bin/env
-        exit 44
-        echo envfile >&2
-        ${coreutils}/bin/cat $envfile >&2
 
-        echo "full monty" >&2
-        # TODO: proper xargs
+        mkdir -p $out
+        source $argsfile
+        for i in ''${!args[@]}; do
+          arg="''${args[i]}"
+          args[$i]="''${arg/CARGO_TARGET_DIR/$CARGO_TARGET_DIR}"
+          #echo "$arg -> ''${args[i]}"
+        done
+        echo "ACTUALLY BUILDING rustc" "''${args[@]}"
+        ${rustc}/bin/rustc "''${args[@]}" \
+          >$out/sout 2>$out/serr || echo "$?" >$out/rc
 
-        ${coreutils}/bin/cat $envfile | /usr/bin/xargs >&2
-        #${coreutils}/bin/env $(${coreutils}/bin/cat $envfile | ${coreutils}/bin/xargs) ${coreutils}/bin/env ${rustc}/bin/rustc "$@"
+        if [ ! -f $out/rc ]; then
+          echo "0" > $out/rc
+        fi
+
+        #echo "RC is "
+        #cat $out/rc
+
+        #echo and out is $out
+        #echo "Leaving inner."
         '';
 
         fakerust = writeScript "rustc"
         ''
         #!${bash}/bin/bash
+
+        # this is cargo just asking for the version
+        if [ $# -eq 1 ]; then
+          ${rustc}/bin/rustc "$@"
+          exit $?
+        fi
+
         args=( )
 
-        store_paths=( )
+        declare -A store_paths
 
-        new_out_dir=$(mktemp -d)
-        env_file=$(mktemp)
+        target_dir=$(mktemp -d)/target
 
+        argsfile=$(mktemp -d)/args
+        args=( )
         while [[ $# -gt 0 ]]; do
-          arg="$1"
-          case $1 in
-            *)
-              args+=( "$arg" )
-              shift
-              ;;
-          esac
-        done
-
-        for i in "''${!args[@]}"
-        do
-          old_arg="''${args[$i]}"
-          args[$i]="''${old_arg/$CARGO_TARGET_DIR/$new_out_dir}"
-
-          # TODO: double check regex
-          store_path=$(echo "''${args[$i]}" | grep -o '/nix/store/[a-zA-Z0-9_+.\-]*' || true)
-          if [ -n "$store_path" ]; then
-            for sp in $store_path; do
-              store_paths+=( "$sp" )
-            done
+          #echo "ARG: $1" >&2
+          if [ -f "$1" ]; then
+            if [[ "$1" =~ ^/ ]]; then
+              echo "FILE $1 EXISTS BUT ABSOLUTE" >&2
+            else
+              echo "FILE $1 EXISTS" >&2
+            fi
+          else
+            echo "NO SUCH FILE: $1" >&2
           fi
+          args+=( "''${1/$CARGO_TARGET_DIR/CARGO_TARGET_DIR}" )
+          shift
         done
+
+        declare -p args > $argsfile
 
         # TODO: this fails on concurrent builds
-        # TODO: we don't need this on rustc -vV
-        ${rsync}/bin/rsync -avh "$CARGO_TARGET_DIR/" "$new_out_dir/" >/dev/null 2>/dev/null
 
         envdir=$(mktemp -d)/env
         mkdir -p $envdir
-        argsfile=$(mktemp -d)/args
-
-        while [[ $# -gt 0 ]]; do
-          old_arg="$1"
-          new_arg="''${old_arg/$CARGO_TARGET_DIR/$new_out_dir}"
-          case $1 in
-            *)
-              args+=( "$arg" )
-              shift
-              ;;
-          esac
-        done
-
 
         # TODO: reset CARGO_TARGET_DIR
         while IFS='=' read -r -d "" k v; do
           if [[ $v =~ $NIX_BUILD_TOP ]]; then
-            echo "Skipping env variable $k" >&2
+            #echo "Skipping env variable $k" >&2
+            true
+          elif [[ $k = "out" ]]; then
+            #echo "Skipping env variable $k" >&2
+            true
           else
             while IFS= read -r sp; do
-              store_paths+=( "$sp" )
+              store_paths["$sp"]=1
             done < <(echo "$v" | grep -o '/nix/store/[a-zA-Z0-9_+.\-]*' || true)
             echo "$v" > $envdir/$k
           fi
         done < <(env -0)
 
-        ${nix}/bin/nix build -L '(derivation { name = "hello"; system = "${builtins.currentSystem}"; builder = /bin/sh; args = [ "-c" (builtins.storePath ${inner}) ]; envdir = '$envdir'; argsfile = "foobar"; } )'
+        #echo "syncing... " >&2
+        ${rsync}/bin/rsync \
+          -ah \
+          --no-owner \
+          --no-perms \
+          "$CARGO_TARGET_DIR/" \
+          "$target_dir/" \
+          >/dev/null 2>/dev/null
 
-        ${rustc}/bin/rustc ''${args[@]}
+        # TODO: add store_paths
 
-        ${rsync}/bin/rsync -avh "$new_out_dir/" "$CARGO_TARGET_DIR/" >/dev/null 2>/dev/null
+        result=$(mktemp -d)/res
+
+        #echo "Inner build" >&2
+        # TODO: forward local files
+        ${nix}/bin/nix build -o $result -L '(
+          derivation
+            { name = "rustc-inner";
+              system = "${builtins.currentSystem}";
+              builder = /bin/sh;
+              args = [
+                "-c"
+                (builtins.storePath ${inner})
+              ];
+              envdir = '$envdir';
+              argsfile = '$argsfile';
+              CARGO_TARGET_DIR = '$target_dir';
+            }
+          )' >&2
+
+        if [ -f $result/sout ]; then
+          cat $result/sout
+        fi
+
+        if [ -f $result/serr ]; then
+          cat $result/serr >&2
+        fi
+
+        if [ -d $result/target ]; then
+          #echo "Syncing back" >&2
+          ${rsync}/bin/rsync \
+            -ah \
+            --no-owner \
+            --no-perms \
+            "$result/target/" \
+            "$CARGO_TARGET_DIR/" \
+            >/dev/null 2>/dev/null
+          #echo "Done syncing" >&2
+        fi
+
+
+        exit "$(< $result/rc)"
         ''; in fakerust;
 
     configurePhase = ''
