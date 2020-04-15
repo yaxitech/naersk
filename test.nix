@@ -131,6 +131,11 @@ let
         doCheck = true;
       };
 
+      workspace-deps = naersk.buildPackage {
+        src = ./test/workspace-deps;
+        doCheck = true;
+      };
+
       workspace-patched = naersk.buildPackage {
         src = ./test/workspace-patched;
         doCheck = true;

@@ -54,7 +54,9 @@ let
             copyBins = false;
             copyBinsFilter = ".";
             copyDocsToSeparateOutput = false;
-            builtDependencies = [];
+            builtDependencies =
+              assert (builtins.trace config.cargotomls true);
+              [];
           };
 
       # the top-level build
