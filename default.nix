@@ -105,6 +105,7 @@ let
                     #crate-b = [ "crate-a" ];
                     #crate-c = [ "crate-a" "crate-b" ];
                   #};
+                  # FIXME: the second arg should be members, not crate names.
                 builtDeps = lib.mapAttrs (k: v: buildDep k ([ k ] ++ v) (map (x: builtDeps.${x}) v)) deps;
               in
                 lib.optionals (! config.isSingleStep)
