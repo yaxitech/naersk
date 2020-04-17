@@ -136,7 +136,7 @@ rec
             (type == "regular" && path == ".cargo/config") ||
             (builtins.any (member:
             let
-              res = lib.hasPrefix member path;
+              res = lib.hasPrefix "${member}/" path;
             in res # builtins.trace "${member} ${path} ${builtins.toJSON res}" res
             ) keepMembers)
           )
@@ -150,6 +150,8 @@ rec
           cp -r ${src'}/* $out
 
           chmod +w -R $out
+
+          echo "KEEPING MEMBERS ${builtins.toJSON keepMembers}"
 
           pushd $out
           for memberdir in $(find . -name 'Cargo.toml'); do

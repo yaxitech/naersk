@@ -44,9 +44,9 @@ let
         build
           {
             pname = "${config.packageName}-deps";
-            src = libb.dummySrc' {
-              name = "${config.packageName}";
-              src = config.root;
+            src = libb.dummySrc {
+              inherit cargoconfig;
+              inherit (config) cargolock cargotomls patchedSources;
             };
             inherit (config) userAttrs;
             # TODO: custom cargoTestCommands should not be needed here
@@ -85,21 +85,35 @@ let
             inherit (config) userAttrs src;
             builtDependencies =
               let
-                deps =
-                  { crate-a = [];
-                    crate-b = [ "crate-a" ];
-                    crate-c = [ "crate-a" "crate-b" ];
-                  };
+                allPackages = config.cargolock.package; # TODO: handle empty
+                localPackages = lib.filter (p: ! builtins.hasAttr "source" p) allPackages;
+                onlyLocalDeps = map (
+                  p:
+                    p // {
+                      dependencies =
+                        lib.filter (d: builtins.length (lib.splitString " " d) == 2) (p.dependencies or []);
+                    }
+                )
+                  localPackages;
+                deps = builtins.listToAttrs (map (p:
+                  { inherit (p) name;
+                    value = map (d: builtins.head (lib.splitString " " d)) p.dependencies;
+                  }) onlyLocalDeps);
+                #deps =
+                  #{
+                    #crate-a = [];
+                    #crate-b = [ "crate-a" ];
+                    #crate-c = [ "crate-a" "crate-b" ];
+                  #};
                 builtDeps = lib.mapAttrs (k: v: buildDep k ([ k ] ++ v) (map (x: builtDeps.${x}) v)) deps;
               in
-            lib.optionals (! config.isSingleStep)
-            [
-              buildDeps
-              #crate-c
-            ] ++
-            # TODO: we don't need to pre-install all the deps, we only need the
-            # roots of the DAG. but for simplicity...
-            builtins.attrValues builtDeps;
+                lib.optionals (! config.isSingleStep)
+                  [
+                    buildDeps
+                    #crate-c
+                  ] ++ lib.optionals config.isWorkspace # TODO: we don't need to pre-install all the deps, we only need the
+                # roots of the DAG. but for simplicity...
+                (builtins.attrValues builtDeps);
           };
     in
       buildTopLevel;
