@@ -210,7 +210,7 @@ let
     inherit userAttrs;
     inherit (sr) src root;
     # Whether we skip pre-building the deps
-    isSingleStep = attrs.singleStep;
+    isSingleStep = attrs.singleStep; # TODO: singleStep if derivation
 
     # The members we want to build
     # (list of directory names)

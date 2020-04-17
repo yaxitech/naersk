@@ -1,4 +1,4 @@
-{ lib, writeText, runCommand, remarshal }:
+{ lib, writeText, runCommand, remarshal, stdenv, tree }:
 let
   builtinz =
     builtins // import ./builtins
@@ -110,6 +110,63 @@ rec
             ) cargotoml.dependencies or {});
       in
         lib.mapAttrs (_: tomlDependencies) cargotomls;
+
+  dummySrc' =
+    { src
+    , name
+    , keepMembers ? []
+    }:
+      let
+        src' = builtins.filterSource
+          (path': type:
+            let
+              path = lib.removePrefix (builtins.toString src + "/") path';
+            in
+            type == "directory" ||
+
+            # top-level cargo toml
+            (type == "regular" && path == "Cargo.toml") ||
+
+            # nested cargo tomls
+            (type == "regular" && lib.hasSuffix "/Cargo.toml" path) ||
+
+            # looks like this works without cargo.lock as well. why?
+            (type == "regular" && path == "Cargo.lock") ||
+
+            (type == "regular" && path == ".cargo/config") ||
+            (builtins.any (member:
+            let
+              res = lib.hasPrefix member path;
+            in res # builtins.trace "${member} ${path} ${builtins.toJSON res}" res
+            ) keepMembers)
+          )
+          src;
+
+      in
+      runCommand "stripped-src-${name}" {}
+        ''
+          mkdir -p $out
+          ${tree}/bin/tree ${src'}
+          cp -r ${src'}/* $out
+
+          chmod +w -R $out
+
+          pushd $out
+          for memberdir in $(find . -name 'Cargo.toml'); do
+            echo "found cargo toml!"
+            echo "$memberdir"
+            pushd "$(dirname "$memberdir")" > /dev/null
+            # if there's only a single file, and that file is the cargo toml,
+            # then we populate. otherwise it passed the filter.
+            if [ "$(find . -type f | wc -l)" == "1" ] && [ -f Cargo.toml ]; then
+              mkdir -p src
+              touch src/lib.rs
+              echo 'fn main(){}' > build.rs
+            fi
+            popd >/dev/null
+          done
+          popd
+        '';
 
   # A very minimal 'src' which makes cargo happy nonetheless
   dummySrc =

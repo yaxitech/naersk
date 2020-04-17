@@ -55,6 +55,7 @@
 , fetchurl
 , lndir
 , userAttrs
+, tree
 }:
 
 let
@@ -260,7 +261,9 @@ let
 
       # make sure that all source files are tagged as "recent" (since we write
       # some stubs here and there)
-      find . -type f -exec touch {} +
+
+      #find . -type f -exec touch --date=@1 {} +
+      #find . -type f -exec touch {} +
 
       for dep in $builtDependencies; do
           log "pre-installing dep $dep"

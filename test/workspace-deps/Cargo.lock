@@ -7,11 +7,15 @@ version = "0.1.0"
 [[package]]
 name = "crate-b"
 version = "0.1.0"
+dependencies = [
+ "crate-a 0.1.0",
+]
 
 [[package]]
 name = "crate-c"
 version = "0.1.0"
 dependencies = [
+ "crate-a 0.1.0",
  "crate-b 0.1.0",
 ]
 
